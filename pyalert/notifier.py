@@ -9,9 +9,9 @@ Public surface
 --------------
 - ``PyAlert``             : the main engine class.
 - ``@watch``               : decorator that wraps a function with
-                             start/finish/crash notifications.
+                              start/finish/crash notifications.
 - ``track_block``          : context manager equivalent of ``@watch`` for
-                             arbitrary code blocks.
+                              arbitrary code blocks.
 - ``PyAlertLogHandler``    : optional ``logging.Handler`` bridge.
 """
 
@@ -26,7 +26,6 @@ import logging
 import mimetypes
 import os
 import signal
-import socket
 import sys
 import threading
 import time
@@ -36,10 +35,10 @@ import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional, TypeVar, Union
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 from pyalert.config import Config, load_config
-from pyalert.monitor import SystemMonitor, SystemSnapshot
+from pyalert.monitor import SystemMonitor
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -85,36 +84,12 @@ class CheckpointEntry:
 # --------------------------------------------------------------------------- #
 
 class PyAlert:
-    """
-    The pyalert notification engine.
-
-    Parameters
-    ----------
-    config:
-        A pre-built ``Config``. If omitted, loads from
-        ``~/.config/pyalert/config.json`` (plus environment overrides).
-    project_name:
-        Friendly label included in every email subject, e.g. "resnet50-run3".
-    cooldown:
-        Overrides ``config.default_cooldown_seconds`` for this instance.
-    track_gpu / track_disk / track_network:
-        Toggle individual SystemMonitor sub-collectors.
-    async_dispatch:
-        If True (default), network sends happen on a background daemon
-        thread so ``checkpoint()`` calls never block the training loop.
-    catch_signals:
-        If True, installs SIGINT/SIGTERM handlers that flush a final
-        "interrupted" alert before re-raising the default behavior.
-    """
-
     def __init__(
         self,
         config: Optional[Config] = None,
         project_name: Optional[str] = None,
         cooldown: Optional[int] = None,
         track_gpu: bool = True,
-        track_disk: bool = True,
-        track_network: bool = True,
         async_dispatch: bool = True,
         catch_signals: bool = False,
     ) -> None:
@@ -123,8 +98,11 @@ class PyAlert:
         self.cooldown = cooldown if cooldown is not None else self.config.default_cooldown_seconds
         self.async_dispatch = async_dispatch
 
+        # Exclude disk and network monitoring to keep execution lightweight
         self.monitor = SystemMonitor(
-            track_gpu=track_gpu, track_disk=track_disk, track_network=track_network
+            track_gpu=track_gpu,
+            track_disk=False,
+            track_network=False,
         )
 
         self.run_id = uuid.uuid4().hex[:8]
@@ -176,11 +154,10 @@ class PyAlert:
                 original_handlers[sig] = signal.getsignal(sig)
                 signal.signal(sig, handler)
             except (ValueError, OSError):
-                # e.g. not in main thread, or unsupported platform/signal
                 pass
 
     # ------------------------------------------------------------------ #
-    # Public API: checkpoint / crash / flush
+    # Public API: checkpoint / report_exception / flush
     # ------------------------------------------------------------------ #
 
     def checkpoint(
@@ -191,11 +168,7 @@ class PyAlert:
         attachments: Optional[List[str]] = None,
         force: bool = False,
     ) -> None:
-        """
-        Record a checkpoint. Buffered checkpoints are coalesced into a
-        single digest email once the cooldown window elapses (or
-        immediately, if `level` is ERROR/CRITICAL or `force=True`).
-        """
+        """Record a checkpoint with optional metrics."""
         level = level.upper()
         entry = CheckpointEntry(
             timestamp=time.time(),
@@ -221,11 +194,7 @@ class PyAlert:
         context: Optional[str] = None,
         attachments: Optional[List[str]] = None,
     ) -> None:
-        """
-        Immediately dispatch a crash alert with a full stack trace,
-        bypassing the cooldown entirely. Safe to call from an
-        ``except`` block with no arguments (uses ``sys.exc_info()``).
-        """
+        """Immediately dispatch a crash alert bypassing cooldown."""
         if exc is None:
             exc_type, exc_value, exc_tb = sys.exc_info()
             tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
@@ -246,11 +215,10 @@ class PyAlert:
         )
         with self._lock:
             self._buffer.append(entry)
-        # Crashes always bypass the rate limiter.
         self.flush()
 
     def flush(self, wait: bool = False) -> None:
-        """Dispatch all buffered checkpoints as one digest email, now."""
+        """Dispatch all buffered checkpoints as one digest email."""
         with self._lock:
             if not self._buffer:
                 return
@@ -270,17 +238,17 @@ class PyAlert:
             self._dispatch_safe(entries, urgent)
 
     def test_connection(self) -> bool:
-        """Send a minimal test email synchronously. Returns True on success."""
+        """Send a test email synchronously."""
         entry = CheckpointEntry(
             timestamp=time.time(),
             level="INFO",
-            message="✅ This is a test alert from pyalert. If you can read this, your bridge is working!",
+            message="✅ Test alert: PyAlert bridge is configured and functioning correctly!",
             snapshot=self._safe_snapshot(),
         )
         return self._dispatch([entry], urgent=False)
 
     # ------------------------------------------------------------------ #
-    # Decorator / context manager
+    # Decorator / Context Manager
     # ------------------------------------------------------------------ #
 
     def watch(
@@ -290,13 +258,7 @@ class PyAlert:
         notify_start: bool = True,
         capture_result: bool = False,
     ) -> Callable[[F], F]:
-        """
-        Decorator: sends a start checkpoint, a finish checkpoint (with
-        elapsed time, and optionally the function's return value), and an
-        immediate crash alert with full traceback on any uncaught
-        exception, which is then re-raised unchanged.
-        """
-
+        """Decorator to wrap functions with start/finish/crash alerts."""
         def decorator(func: F) -> F:
             label = project or func.__name__
 
@@ -307,7 +269,7 @@ class PyAlert:
                 started = time.time()
                 try:
                     result = func(*args, **kwargs)
-                except BaseException as exc:  # noqa: BLE001 - must catch everything to alert
+                except BaseException as exc:
                     self.report_exception(exc, context=f"'{label}' crashed")
                     raise
                 elapsed = time.time() - started
@@ -326,7 +288,6 @@ class PyAlert:
         return decorator
 
     def track_block(self, name: str, attachments: Optional[List[str]] = None) -> "_TrackBlock":
-        """Context manager version of ``watch`` for arbitrary code blocks."""
         return _TrackBlock(self, name, attachments)
 
     # ------------------------------------------------------------------ #
@@ -339,7 +300,7 @@ class PyAlert:
     def _safe_snapshot(self) -> Optional[Dict[str, Any]]:
         try:
             return self.monitor.snapshot().as_dict()
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             sys.stderr.write(f"[pyalert] WARNING: snapshot failed ({exc}).\n")
             return None
 
@@ -383,7 +344,7 @@ class PyAlert:
     def _dispatch_safe(self, entries: List[CheckpointEntry], urgent: bool) -> None:
         try:
             self._dispatch(entries, urgent)
-        except Exception as exc:  # noqa: BLE001 - background thread must never crash the host
+        except Exception as exc:
             sys.stderr.write(f"[pyalert] WARNING: failed to dispatch alert ({exc}).\n")
 
     def _dispatch(self, entries: List[CheckpointEntry], urgent: bool) -> bool:
@@ -401,7 +362,7 @@ class PyAlert:
         return self._send_email(subject, html_body, all_attachments)
 
     def _build_subject(self, entries: List[CheckpointEntry], urgent: bool) -> str:
-        prefix = "🚨 CRASH" if urgent else "📈 Digest"
+        prefix = "[!] CRASH" if urgent else "◆ Digest"
         count = len(entries)
         plural = "s" if count != 1 else ""
         return f"[pyalert] {prefix} — {self.project_name} ({count} event{plural})"
@@ -429,7 +390,9 @@ class PyAlert:
                 for a in attachments
             ],
         }
-        body = json.dumps(payload).encode("utf-8")
+
+        # Encode cleanly as UTF-8
+        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
         if self.config.dry_run:
             sys.stderr.write(
@@ -445,14 +408,28 @@ class PyAlert:
                     self.config.webhook_url,
                     data=body,
                     method="POST",
-                    headers={"Content-Type": "application/json"},
+                    headers={"Content-Type": "application/json; charset=utf-8"},
                 )
                 with urllib.request.urlopen(req, timeout=self.config.timeout_seconds) as resp:
-                    resp.read()  # drain
-                    if 200 <= resp.status < 300:
-                        return True
-                    last_error = RuntimeError(f"HTTP {resp.status}")
-            except (urllib.error.URLError, urllib.error.HTTPError, socket.timeout, OSError) as exc:
+                    raw_data = resp.read().decode("utf-8")
+                    try:
+                        res_json = json.loads(raw_data)
+                        if res_json.get("ok"):
+                            return True
+                        err_msg = res_json.get("error", "Unknown error from Apps Script")
+                        sys.stderr.write(f"[pyalert] Apps Script rejected request: {err_msg}\n")
+                        return False
+                    except json.JSONDecodeError:
+                        if "<html" in raw_data.lower() or "accounts.google.com" in raw_data:
+                            sys.stderr.write(
+                                "[pyalert] ERROR: Received Google Login page. "
+                                "Your Apps Script deployment access MUST be set to 'Anyone', not 'Only myself'.\n"
+                            )
+                        else:
+                            sys.stderr.write(f"[pyalert] ERROR: Unexpected response from bridge: {raw_data[:250]}\n")
+                        return False
+
+            except (urllib.error.URLError, urllib.error.HTTPError, OSError) as exc:
                 last_error = exc
 
             if attempt < self.config.retries:
@@ -481,10 +458,8 @@ class PyAlert:
                     f"Process exiting after {_format_duration(time.time() - self._start_time)} total runtime.",
                     level="INFO",
                 )
-            # Synchronous final flush — atexit hooks can't reliably wait on
-            # daemon threads once the interpreter starts tearing down.
             self.flush(wait=True)
-        except Exception:  # noqa: BLE001 - never raise during interpreter shutdown
+        except Exception:
             pass
         finally:
             self.monitor.close()
@@ -495,8 +470,6 @@ class PyAlert:
 # --------------------------------------------------------------------------- #
 
 class _TrackBlock:
-    """Implementation object returned by ``PyAlert.track_block``."""
-
     def __init__(self, alert: PyAlert, name: str, attachments: Optional[List[str]]) -> None:
         self._alert = alert
         self._name = name
@@ -514,7 +487,7 @@ class _TrackBlock:
             self._alert.report_exception(
                 exc_val, context=f"Block '{self._name}' crashed", attachments=self._attachments
             )
-            return False  # do not suppress the exception
+            return False
         self._alert.checkpoint(
             f"✔ Completed block '{self._name}' in {_format_duration(elapsed)}",
             level="SUCCESS",
@@ -525,25 +498,14 @@ class _TrackBlock:
 
 
 def track_block(alert: PyAlert, name: str, attachments: Optional[List[str]] = None) -> _TrackBlock:
-    """Module-level convenience wrapper: ``track_block(alert, "phase1")``."""
     return alert.track_block(name, attachments=attachments)
 
 
 # --------------------------------------------------------------------------- #
-# Optional logging.Handler bridge
+# Logging Bridge
 # --------------------------------------------------------------------------- #
 
 class PyAlertLogHandler(logging.Handler):
-    """
-    A ``logging.Handler`` that forwards log records into a ``PyAlert``
-    instance's checkpoint buffer. Attach to any logger to get automatic
-    email digests of WARNING+ log lines (or any level you configure),
-    without changing your logging calls at all::
-
-        handler = PyAlertLogHandler(alert, level=logging.WARNING)
-        logging.getLogger().addHandler(handler)
-    """
-
     _LOGGING_TO_PYALERT = {
         logging.DEBUG: "DEBUG",
         logging.INFO: "INFO",
@@ -564,7 +526,7 @@ class PyAlertLogHandler(logging.Handler):
                 self._alert.report_exception(context=message)
             else:
                 self._alert.checkpoint(message, level=level)
-        except Exception:  # noqa: BLE001 - a logging handler must never raise
+        except Exception:
             self.handleError(record)
 
 
@@ -591,7 +553,7 @@ def _format_duration(seconds: float) -> str:
 def _safe_repr(value: Any, max_len: int = 300) -> str:
     try:
         r = repr(value)
-    except Exception:  # noqa: BLE001
+    except Exception:
         r = "<unrepresentable value>"
     if len(r) > max_len:
         r = r[: max_len - 3] + "..."
@@ -615,42 +577,32 @@ def _render_metric_row(label: str, value: Any, unit: str = "") -> str:
 
 
 def _render_snapshot_table(snapshot: Optional[Dict[str, Any]]) -> str:
+    """Renders only essential metrics: Host, PID, Python, CPU, System RAM in GB, and GPU."""
     if not snapshot:
         return '<p style="color:#9ca3af;font-size:12px;">No system snapshot available.</p>'
 
     rows = []
     rows.append(_render_metric_row("Host", snapshot.get("hostname")))
-    rows.append(_render_metric_row("Platform", snapshot.get("platform")))
-    rows.append(_render_metric_row("Python", snapshot.get("python_version")))
     rows.append(_render_metric_row("PID", snapshot.get("pid")))
+    rows.append(_render_metric_row("Python", snapshot.get("python_version")))
+
     if snapshot.get("cpu_percent_total") is not None:
         n_cores = len(snapshot.get("cpu_percent_per_core") or [])
-        rows.append(_render_metric_row("CPU (avg)", snapshot["cpu_percent_total"], f"% across {n_cores} cores"))
-    if snapshot.get("load_average"):
-        rows.append(_render_metric_row("Load avg (1/5/15m)", ", ".join(str(x) for x in snapshot["load_average"])))
-    if snapshot.get("ram_used_mb") is not None:
+        rows.append(_render_metric_row("CPU", f"{snapshot['cpu_percent_total']:.1f}%", f" ({n_cores} cores)"))
+
+    # System RAM rendered strictly in GB
+    if snapshot.get("ram_used_mb") is not None and snapshot.get("ram_total_mb") is not None:
+        ram_used_gb = snapshot["ram_used_mb"] / 1024.0
+        ram_total_gb = snapshot["ram_total_mb"] / 1024.0
         rows.append(
             _render_metric_row(
                 "System RAM",
-                f"{snapshot['ram_used_mb']:.0f} / {snapshot['ram_total_mb']:.0f}",
-                f" MB ({snapshot.get('ram_percent')}%)",
+                f"{ram_used_gb:.2f} / {ram_total_gb:.2f} GB",
+                f" ({snapshot.get('ram_percent')}%)",
             )
         )
-    if snapshot.get("process_rss_mb") is not None:
-        rows.append(_render_metric_row("Process RSS (incl. children)", snapshot["process_rss_mb"], " MB"))
-    if snapshot.get("disk_percent") is not None:
-        rows.append(
-            _render_metric_row(
-                "Disk (cwd)",
-                f"{snapshot['disk_used_gb']:.1f} / {snapshot['disk_total_gb']:.1f}",
-                f" GB ({snapshot['disk_percent']}%)",
-            )
-        )
-    if snapshot.get("net_sent_mb") is not None:
-        rows.append(_render_metric_row("Network (cumulative)", f"↑{snapshot['net_sent_mb']:.0f} / ↓{snapshot['net_recv_mb']:.0f}", " MB"))
-    if snapshot.get("uptime_seconds") is not None:
-        rows.append(_render_metric_row("Host uptime", _format_duration(snapshot["uptime_seconds"])))
 
+    # Render GPU metrics if present
     gpu_rows = []
     for gpu in snapshot.get("gpus") or []:
         label = f"GPU {gpu.get('index')}: {gpu.get('name')}"
@@ -661,23 +613,15 @@ def _render_snapshot_table(snapshot: Optional[Dict[str, Any]]) -> str:
             mem_pct = ""
             if gpu.get("memory_total_mb"):
                 mem_pct = f" ({gpu['memory_used_mb'] / gpu['memory_total_mb'] * 100:.0f}%)"
-            bits.append(f"mem {gpu['memory_used_mb']:.0f}/{gpu.get('memory_total_mb', 0):.0f}MB{mem_pct}")
+            bits.append(f"vram {gpu['memory_used_mb'] / 1024:.2f}/{gpu.get('memory_total_mb', 0) / 1024:.2f} GB{mem_pct}")
         if gpu.get("temperature_c") is not None:
             bits.append(f"{gpu['temperature_c']:.0f}°C")
-        if gpu.get("power_watts") is not None:
-            bits.append(f"{gpu['power_watts']:.0f}W")
         gpu_rows.append(_render_metric_row(label, ", ".join(bits)))
-
-    if not snapshot.get("gpus"):
-        gpu_rows.append(
-            '<tr><td colspan="2" style="padding:4px 0;color:#9ca3af;font-size:12px;">'
-            "No NVIDIA GPU detected.</td></tr>"
-        )
 
     return (
         '<table style="width:100%;border-collapse:collapse;">'
         + "".join(rows)
-        + '<tr><td colspan="2" style="padding-top:8px;"></td></tr>'
+        + ('<tr><td colspan="2" style="padding-top:6px;"></td></tr>' if gpu_rows else "")
         + "".join(gpu_rows)
         + "</table>"
     )
@@ -708,7 +652,7 @@ def _render_entry_card(entry: CheckpointEntry) -> str:
     if entry.attachments:
         names = ", ".join(_esc(a.filename) for a in entry.attachments)
         attachments_html = (
-            f'<p style="margin:6px 0 0;font-size:12px;color:#6b7280;">📎 Attached: {names}</p>'
+            f'<p style="margin:6px 0 0;font-size:12px;color:#6b7280;">◆ Attached: {names}</p>'
         )
 
     return f"""
@@ -732,12 +676,8 @@ def render_digest_html(
     run_id: str,
     urgent: bool,
 ) -> str:
-    """
-    Render the full HTML email body. Inline-styled, table-based layout for
-    maximum compatibility with Gmail (web/mobile), Apple Mail, and Outlook.
-    """
     header_color = "#dc2626" if urgent else "#2563eb"
-    header_label = "🚨 Crash Alert" if urgent else "📈 Status Digest"
+    header_label = "[!] CRASH ALERT" if urgent else "◆ STATUS DIGEST"
 
     entries_html = "".join(_render_entry_card(e) for e in entries)
     latest_snapshot = entries[-1].snapshot if entries else None
@@ -788,8 +728,7 @@ def render_digest_html(
           <tr>
             <td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
               <p style="margin:0;font-size:11px;color:#9ca3af;">
-                Sent by pyalert via your own Google Apps Script bridge — no third-party service ever
-                saw your Gmail credentials. Run <span style="font-family:monospace;">pyalert-setup</span> to reconfigure.
+                Sent by pyalert. Run <span style="font-family:monospace;">pyalert-setup</span> to reconfigure.
               </p>
             </td>
           </tr>

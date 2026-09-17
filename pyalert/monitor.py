@@ -385,25 +385,6 @@ class SystemMonitor:
             except Exception:  # noqa: BLE001
                 pass
 
-            snap.process_rss_mb = self._process_rss_mb()
-
-            if self.track_disk:
-                try:
-                    du = psutil.disk_usage(os.getcwd())
-                    snap.disk_used_gb = round(du.used / (1024 ** 3), 2)
-                    snap.disk_total_gb = round(du.total / (1024 ** 3), 2)
-                    snap.disk_percent = du.percent
-                except Exception:  # noqa: BLE001
-                    pass
-
-            if self.track_network:
-                try:
-                    net = psutil.net_io_counters()
-                    snap.net_sent_mb = round(net.bytes_sent / (1024 ** 2), 1)
-                    snap.net_recv_mb = round(net.bytes_recv / (1024 ** 2), 1)
-                except Exception:  # noqa: BLE001
-                    pass
-
             if self._boot_time:
                 snap.uptime_seconds = round(time.time() - self._boot_time, 0)
 
