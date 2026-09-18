@@ -49,7 +49,7 @@ class Config:
     default_cooldown_seconds: int = 60
     max_attachment_mb: float = 20.0  # Under Gmail's ~25MB cap
     timeout_seconds: int = 15
-    retries: int = 3
+    retries: int = 1
     dry_run: bool = False
 
     def to_dict(self) -> Dict[str, Any]:

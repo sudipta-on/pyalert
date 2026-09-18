@@ -86,17 +86,23 @@ class CheckpointEntry:
 class PyAlert:
     def __init__(
         self,
+        project_name: str = "PyAlert-Task",
         config: Optional[Config] = None,
-        project_name: Optional[str] = None,
         cooldown: Optional[int] = None,
-        track_gpu: bool = True,
+        track_gpu: bool = False,
         async_dispatch: bool = True,
         catch_signals: bool = False,
+        retries: int = 1,
     ) -> None:
         self.config = config or load_config()
         self.project_name = project_name or os.path.basename(sys.argv[0]) or "pyalert-job"
         self.cooldown = cooldown if cooldown is not None else self.config.default_cooldown_seconds
         self.async_dispatch = async_dispatch
+        self.retries = retries
+        if self.retries > 1:
+            self.config.retries = self.retries
+        if self.retries < 1:
+            raise ValueError("retries must be >= 1")
 
         # Exclude disk and network monitoring to keep execution lightweight
         self.monitor = SystemMonitor(
@@ -725,13 +731,13 @@ def render_digest_html(
               </div>
             </td>
           </tr>
-          <tr>
+            <tr>
             <td style="padding:16px 24px;background:#f9fafb;border-top:1px solid #e5e7eb;">
-              <p style="margin:0;font-size:11px;color:#9ca3af;">
-                Sent by pyalert. Run <span style="font-family:monospace;">pyalert-setup</span> to reconfigure.
-              </p>
+                <p style="margin:0;font-size:11px;color:#9ca3af; text-align:center;">
+                Sent by pyalert-mail. Run <span style="font-family:monospace;">pyalert-setup</span> to reconfigure.
+                </p>
             </td>
-          </tr>
+            </tr>
         </table>
       </td>
     </tr>

@@ -4,35 +4,25 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyalert-mail"
-version = "0.1.1"
+version = "0.1.2"
 description = "Zero-credential-leak email alerting for long-running ML/HPC jobs, powered by a user-owned Gmail Apps Script bridge."
 readme = "README.md"
 requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [
-    { name = "pyalert contributors" }
+    { name = "Sudipta Majumder", email = "sudiptam.iitkgp.phy@gmail.com" }
 ]
 keywords = [
     "monitoring", "alerting", "email", "gmail", "machine-learning",
     "hpc", "training", "gpu", "nvml", "notifications", "apps-script"
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
     "Topic :: System :: Monitoring",
-    "Topic :: System :: Distributed Computing",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-    "Typing :: Typed",
 ]
 dependencies = [
     "psutil>=5.9.0",
@@ -49,9 +39,6 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/sudipta-on/pyalert"
-Repository = "https://github.com/sudipta-on/pyalert"
-Issues = "https://github.com/sudipta-on/pyalert/issues"
-Changelog = "https://github.com/sudipta-on/pyalert/blob/main/CHANGELOG.md"
 
 [project.scripts]
 pyalert-setup = "pyalert.config:main"
