@@ -1,9 +1,9 @@
 # pyalert
 
-[![PyPI version](https://img.shields.io/pypi/v/pyalert.svg)](https://pypi.org/project/pyalert/)
-[![Python versions](https://img.shields.io/pypi/pyversions/pyalert.svg)](https://pypi.org/project/pyalert/)
+[![PyPI version](https://img.shields.io/pypi/v/pyalert-mail.svg)](https://pypi.org/project/pyalert-mail/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pyalert-mail.svg)](https://pypi.org/project/pyalert-mail/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Downloads](https://img.shields.io/pypi/dm/pyalert.svg)](https://pypi.org/project/pyalert/)
+[![Downloads](https://img.shields.io/pypi/dm/pyalert-mail.svg)](https://pypi.org/project/pyalert-mail/)
 
 **Get emailed when your training run finishes, stalls, or crashes — without ever handing an email password or a paid API key to a Python package.**
 
@@ -28,55 +28,37 @@
 
 ## Architecture
 
-```
-                      YOUR MACHINE (laptop / HPC node / cloud VM)
-   ┌─────────────────────────────────────────────────────────────────┐
-   │                                                                 │
-   │   your_script.py                                                │
-   │   ┌───────────────────────────────────────────────────────────┐ │
-   │   │  from pyalert import PyAlert                              │ │
-   │   │  alert = PyAlert(project_name="training-run")             │ │
-   │   │                                                           │ │
-   │   │                         ─┐                                │ │
-   │   │  def train(): ...        │ decorator / context manager /  │ │
-   │   │                          │  manual .checkpoint() calls    │ │
-   │   │  with alert.track_block()│                                │ │
-   │   │  alert.checkpoint(...)  ─┘                                │ │
-   │   └──────────────────────┬────────────────────────────────────┘ │
-   │                          │                                      │
-   │                          ▼                                      │
-   │   ┌─────────────────────────────────────────────────────────┐   │
-   │   │  pyalert.notifier.PyAlert                               │   │
-   │   │  ┌───────────────┐    ┌───────────────┐   ┌───────────┐ │   │
-   │   │  │ Rate limiter/ │    │ HTML digest   │   │ Attachment│ │   │
-   │   │  │ event buffer  │──▶│ renderer      │──▶│ base64    │ │   │
-   │   │  │ (cooldown,    │    │ (inline-CSS,  │   │ encoder   │ │   │
-   │   │  │ atexit flush) │    │ mobile-safe)  │   │           │ │   │
-   │   │  └───────────────┘    └───────────────┘   └───────────┘ │   │
-   │   └────────────────────────────┬────────────────────────────┘   │
-   │                                │  background thread             │
-   │   ┌─────────────────────────┐  │                                │
-   │   │ pyalert.monitor         │  │                                │
-   │   │ SystemMonitor           │  │                                │
-   │   │  • psutil: CPU/RAM/disk │  │                                │
-   │   │  • ctypes → NVML: GPU   │  │                                │
-   │   └─────────────────────────┘  │                                │
-   │                                ▼                                │
-   │                    HTTPS POST (JSON payload)                    │
-   └────────────────────────────────┼────────────────────────────────┘
-                                    │
-                                    ▼
-                 ┌────────────────────────────────────────┐
-                 │  Google Apps Script Web App (Code.gs)  │
-                 │  deployed under YOUR Google account    │
-                 │  • validates optional shared secret    │
-                 │  • decodes attachments                 │
-                 │  • GmailApp.sendEmail(...)             │  ← runs as YOU,
-                 └───────────────────┬────────────────────┘   OAuth-authorized
-                                     │                          by Google, no
-                                     ▼                          password ever
-                        📧 Styled HTML email in your inbox     passed around
-```
+<pre style="font-family: ui-monospace, Menlo, Consolas, monospace; line-height: 1.25; font-size: 12px;">
+                       YOUR MACHINE (laptop / HPC / cloud VM)
+  +-------------------------------------------------------------------------+
+  |  your_script.py                                                         |
+  |  +-------------------------------------------------------------------+  |
+  |  | alert = PyAlert(project_name="training-run")                      |  |
+  |  | alert.checkpoint(...) / with alert.track_block(): / @alert.watch  |  |
+  |  +-----------------------------------+-------------------------------+  |
+  |                                      |                                  |
+  |                                      v                                  |
+  |  pyalert.notifier.PyAlert                                               |
+  |  +-----------------+    +-----------------+    +---------------------+  |
+  |  |  Rate Limiter   |--->|   HTML Digest   |--->| Attachment Encoder  |  |
+  |  | (Cooldown/Flush)|    | (Inline-styled) |    |   (Base64 engine)   |  |
+  |  +-----------------+    +-----------------+    +---------------------+  |
+  |                                      ^                                  |
+  |  pyalert.monitor.SystemMonitor       |                                  |
+  |  [psutil: CPU/RAM] + [ctypes: NVML] -+ (System snapshot)                |
+  +--------------------------------------|----------------------------------+
+                                         | HTTPS POST (JSON payload)
+                                         v
+               +---------------------------------------------------+
+               |      Google Apps Script Bridge (Code.gs)          |
+               |         Deployed under YOUR Google account        |
+               |  - Validates shared secret token                  |
+               |  - Unpacks attachments & calls GmailApp           |
+               +-------------------------+-------------------------+
+                                         |
+                                         v
+                         Recipient Inbox (Styled HTML Digest)
+</pre>
 
 Because the Apps Script runs *inside* Google's infrastructure under your own account, Gmail sending is authorized via Google's own OAuth consent screen when you deploy it — pyalert (the Python client) only ever sees a webhook URL that you control, and can be revoked or redeployed at any time from `script.google.com`.
 
@@ -85,7 +67,7 @@ Because the Apps Script runs *inside* Google's infrastructure under your own acc
 ## Installation
 
 ```bash
-pip install pyalert
+pip install pyalert-mail
 ```
 
 Requires Python 3.8+. The only hard runtime dependency is `psutil`.
@@ -266,7 +248,7 @@ Every digest includes:
 ## Project layout
 
 ```
-pyalert-runner/
+pyalert-mail/
 ├── pyproject.toml
 ├── LICENSE
 ├── README.md

@@ -3,8 +3,8 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "pyalert"
-version = "1.0.0"
+name = "pyalert-mail"
+version = "0.1.1"
 description = "Zero-credential-leak email alerting for long-running ML/HPC jobs, powered by a user-owned Gmail Apps Script bridge."
 readme = "README.md"
 requires-python = ">=3.8"
@@ -48,10 +48,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/your-org/pyalert"
-Repository = "https://github.com/your-org/pyalert"
-Issues = "https://github.com/your-org/pyalert/issues"
-Changelog = "https://github.com/your-org/pyalert/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/sudipta-on/pyalert"
+Repository = "https://github.com/sudipta-on/pyalert"
+Issues = "https://github.com/sudipta-on/pyalert/issues"
+Changelog = "https://github.com/sudipta-on/pyalert/blob/main/CHANGELOG.md"
 
 [project.scripts]
 pyalert-setup = "pyalert.config:main"
